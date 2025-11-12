@@ -134,7 +134,7 @@ async function processImage(inputPath, outputPath, option = 'A2') {
         // File polling function to check for output
         let pollCount = 0;
         let lastFileSize = 0;
-        const maxPolls = 100; // 5 minutes max (3000ms * 100)
+        const maxPolls = 200; // 10 minutes max (3000ms * 200)
         
         const pollForFile = setInterval(() => {
             pollCount++;
@@ -224,7 +224,7 @@ async function processImage(inputPath, outputPath, option = 'A2') {
                             childProcess.kill('SIGKILL');
                         }
                         
-                        reject(new Error(`ShiftN timeout: No output file created after ${maxPolls * 500}ms. STDERR: ${stderr}`));
+                        reject(new Error(`ShiftN timeout: No output file created after ${maxPolls * 3000}ms. STDERR: ${stderr}`));
                     }
                 }
             } catch (error) {
