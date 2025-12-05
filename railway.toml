@@ -1,0 +1,32 @@
+# Railway Deployment Configuration
+# See: https://docs.railway.app/reference/config-as-code
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Start with 1 replica, can be increased via Railway dashboard or this file
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Health check configuration
+healthcheckPath = "/health"
+healthcheckTimeout = 10
+
+# Autoscaling (disabled by default)
+# To enable autoscaling:
+# 1. Uncomment the [autoscaling] section below
+# 2. Adjust thresholds based on your needs
+# 3. Deploy changes: git commit && git push
+
+# [autoscaling]
+# enabled = true
+# minReplicas = 1              # Minimum instances (cost: ~$30/month)
+# maxReplicas = 5              # Maximum instances (cost: ~$150/month at max)
+# targetCPUPercent = 70        # Scale up when CPU > 70%
+# targetMemoryPercent = 80     # Scale up when Memory > 80%
+
+# Note: Autoscaling requires Railway Pro plan
+# Scaling is gradual - Railway adds/removes instances based on sustained metrics

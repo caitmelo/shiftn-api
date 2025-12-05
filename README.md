@@ -16,6 +16,8 @@ ShiftN is a powerful Windows tool for automatic correction of converging lines i
 - Automatic file cleanup and process management
 - Health monitoring endpoints
 - Multiple correction modes (A1, A2, A3)
+- Concurrency control to prevent system overload
+- Horizontal scaling support with Railway autoscaling
 
 ## Setup
 
@@ -140,7 +142,12 @@ Health check endpoint (no authentication required).
 {
   "status": "healthy",
   "shiftNPath": "/app/shiftn",
-  "shiftNExists": true
+  "shiftNExists": true,
+  "concurrency": {
+    "active": 2,
+    "max": 5,
+    "available": 3
+  }
 }
 ```
 
@@ -184,6 +191,11 @@ Correct perspective distortion in an image (requires authentication).
 **Response:**
 - Content-Type: `image/jpeg`
 - Body: Corrected image file
+
+**Rate Limiting:**
+- Returns HTTP 503 when server is at maximum concurrent capacity
+- Response includes `retryAfter` field (seconds to wait before retrying)
+- Clients should implement retry logic with exponential backoff
 
 ## Usage Examples
 
@@ -252,9 +264,26 @@ API_KEY=your-secret-api-key-here
 PORT=3000
 NODE_ENV=production
 
+# Concurrency Configuration
+MAX_CONCURRENT_PROCESSES=5
+
+# Processing Timeout Configuration
+PROCESS_TIMEOUT_MS=300000  # 5 minutes (in milliseconds)
+POLL_INTERVAL_MS=3000      # 3 seconds (in milliseconds)
+
 # ShiftN Configuration
 SHIFTN_PATH=/app/shiftn
 ```
+
+**Concurrency Settings:**
+- `MAX_CONCURRENT_PROCESSES`: Maximum simultaneous ShiftN processes (default: 5)
+- Prevents system overload from excessive concurrent requests
+- Recommended values: 5-10 for single instance, 20-40 for scaled deployments
+
+**Timeout Settings:**
+- `PROCESS_TIMEOUT_MS`: Maximum time to wait for ShiftN to complete (default: 300000ms = 5 minutes)
+- `POLL_INTERVAL_MS`: How often to check for output file completion (default: 3000ms = 3 seconds)
+- Adjust based on typical image complexity and processing requirements
 
 ### ShiftN Parameters
 
@@ -282,6 +311,26 @@ railway login
 railway up
 ```
 
+**Autoscaling Configuration:**
+
+Railway Pro supports automatic horizontal scaling. Configure in `railway.toml`:
+
+```toml
+[deploy]
+minReplicas = 1
+maxReplicas = 5
+
+[autoscaling]
+enabled = true
+targetCPUPercent = 70
+targetMemoryPercent = 80
+```
+
+- Start with 1 instance (~$30/month)
+- Automatically scales up during high load
+- Scales down during quiet periods
+- Recommended: Enable autoscaling when concurrent load exceeds 20-30 jobs
+
 ### Render Deployment
 
 1. Push repository to GitHub
@@ -291,11 +340,13 @@ railway up
 
 ## Performance
 
-- **Processing time**: 30-60 seconds per image on average
+- **Processing time**: 30-90 seconds per image on average
 - **File size limit**: 50MB
-- **Concurrent requests**: Supported with automatic process management
+- **Concurrent capacity**: Configurable via MAX_CONCURRENT_PROCESSES (default: 5)
+- **Tested maximum**: 40 concurrent processes per instance
 - **Memory usage**: ~200MB base + ~100MB per active job
 - **Cleanup**: Automatic removal of temporary files after processing
+- **Scaling**: Supports horizontal scaling with Railway autoscaling
 
 ## Technical Details
 
@@ -338,6 +389,11 @@ railway up
 **Authentication errors:**
 - Verify API key in `.env` file (or configured in your service provider's dashboard)
 - Check API key in request headers/query
+
+**503 Service Unavailable:**
+- Server at maximum concurrent capacity
+- Wait and retry after delay specified in response
+- Consider enabling autoscaling if this occurs frequently
 
 **Processing failures:**
 - Ensure image format is supported
@@ -397,6 +453,13 @@ docker exec container-name wine --version
 - **Docker issues**: Check Docker documentation
 
 ## Changelog
+
+### Version 1.1.0
+- Added concurrency control with configurable MAX_CONCURRENT_PROCESSES
+- Added job tracking and active job monitoring
+- Enhanced health endpoint with concurrency metrics
+- Added HTTP 503 rate limiting when at capacity
+- Added Railway autoscaling configuration support
 
 ### Version 1.0.0
 - Linux/Wine compatibility

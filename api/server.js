@@ -15,6 +15,14 @@ const SHIFTN_PATH = process.env.SHIFTN_PATH || '/app/shiftn';
 const SHIFTN_EXE = path.join(SHIFTN_PATH, 'ShiftN.exe');
 const IS_LINUX = process.platform === 'linux'; // Detect if running on Linux
 
+// Concurrency control
+const MAX_CONCURRENT_PROCESSES = parseInt(process.env.MAX_CONCURRENT_PROCESSES || '5', 10);
+const activeJobs = new Map(); // jobId -> { startTime, inputPath, outputPath, status }
+
+// Processing timeout configuration
+const PROCESS_TIMEOUT_MS = parseInt(process.env.PROCESS_TIMEOUT_MS || '300000', 10); // Default: 5 minutes
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '3000', 10); // Default: 3 seconds
+
 // Create temp directories if they don't exist
 const UPLOAD_DIR = path.join(__dirname, 'temp', 'uploads');
 const OUTPUT_DIR = path.join(__dirname, 'temp', 'outputs');
@@ -134,7 +142,7 @@ async function processImage(inputPath, outputPath, option = 'A2') {
         // File polling function to check for output
         let pollCount = 0;
         let lastFileSize = 0;
-        const maxPolls = 100; // 5 minutes max (3000ms * 100)
+        const maxPolls = Math.ceil(PROCESS_TIMEOUT_MS / POLL_INTERVAL_MS);
         
         const pollForFile = setInterval(() => {
             pollCount++;
@@ -224,14 +232,14 @@ async function processImage(inputPath, outputPath, option = 'A2') {
                             childProcess.kill('SIGKILL');
                         }
                         
-                        reject(new Error(`ShiftN timeout: No output file created after ${maxPolls * 500}ms. STDERR: ${stderr}`));
+                        reject(new Error(`ShiftN timeout: No output file created after ${PROCESS_TIMEOUT_MS}ms. STDERR: ${stderr}`));
                     }
                 }
             } catch (error) {
                 // Continue polling if file system error (file might be locked)
                 console.log(`Polling error (attempt ${pollCount}): ${error.message}`);
             }
-        }, 3000); // Poll every 3 seconds
+        }, POLL_INTERVAL_MS); // Poll interval from environment variable
         
         // Handle process errors (startup failures)
         childProcess.on('error', (error) => {
@@ -286,11 +294,26 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'healthy', 
         shiftNPath: SHIFTN_PATH,
-        shiftNExists: fsSync.existsSync(SHIFTN_EXE)
+        shiftNExists: fsSync.existsSync(SHIFTN_EXE),
+        concurrency: {
+            active: activeJobs.size,
+            max: MAX_CONCURRENT_PROCESSES,
+            available: MAX_CONCURRENT_PROCESSES - activeJobs.size
+        }
     });
 });
 
 app.post('/correct', authenticate, upload.single('image'), async (req, res) => {
+    // Check concurrency limit
+    if (activeJobs.size >= MAX_CONCURRENT_PROCESSES) {
+        return res.status(503).json({ 
+            error: 'Server busy processing maximum concurrent requests',
+            activeJobs: activeJobs.size,
+            maxConcurrent: MAX_CONCURRENT_PROCESSES,
+            retryAfter: 30
+        });
+    }
+    
     console.log('=== UPLOAD REQUEST DEBUG ===');
     console.log('Request method:', req.method);
     console.log('Content-Type:', req.get('Content-Type'));
@@ -317,10 +340,21 @@ app.post('/correct', authenticate, upload.single('image'), async (req, res) => {
         return res.status(400).json({ error: 'No image file provided' });
     }
     
+    const jobId = uuidv4();
     const inputPath = req.file.path;
     const option = req.body.option || 'A2';
     const outputFilename = `${uuidv4()}.jpg`;
     const outputPath = path.join(OUTPUT_DIR, outputFilename);
+    
+    // Register active job
+    activeJobs.set(jobId, {
+        startTime: Date.now(),
+        inputPath,
+        outputPath,
+        status: 'processing'
+    });
+    
+    console.log(`[${jobId}] Job started. Active jobs: ${activeJobs.size}/${MAX_CONCURRENT_PROCESSES}`);
     
     console.log('Processing setup:', {
         inputPath,
@@ -332,35 +366,46 @@ app.post('/correct', authenticate, upload.single('image'), async (req, res) => {
     try {
         const resultPath = await processImage(inputPath, outputPath, option);
         
+        const duration = Date.now() - activeJobs.get(jobId).startTime;
+        console.log(`[${jobId}] Processing complete in ${duration}ms`);
+        
         // Send the corrected image
         res.sendFile(resultPath, async (err) => {
             if (err) {
-                console.error('Error sending file:', err);
+                console.error(`[${jobId}] Error sending file:`, err);
             } else {
-                console.log('File sent successfully:', resultPath);
+                console.log(`[${jobId}] File sent successfully`);
             }
             
             // Clean up files after sending
             try {
                 await fs.unlink(inputPath);
                 await fs.unlink(resultPath);
-                console.log('Cleanup completed for:', inputPath, resultPath);
+                console.log(`[${jobId}] Cleanup completed`);
             } catch (cleanupErr) {
-                console.error('Cleanup error:', cleanupErr);
+                console.error(`[${jobId}] Cleanup error:`, cleanupErr);
+            } finally {
+                // Remove from active jobs
+                activeJobs.delete(jobId);
+                console.log(`[${jobId}] Job finished. Active jobs: ${activeJobs.size}/${MAX_CONCURRENT_PROCESSES}`);
             }
         });
         
     } catch (error) {
-        console.error('Processing error:', error);
+        console.error(`[${jobId}] Processing error:`, error);
         
         // Clean up input file on error
         try {
             if (fsSync.existsSync(inputPath)) {
                 await fs.unlink(inputPath);
-                console.log('Cleaned up input file after error:', inputPath);
+                console.log(`[${jobId}] Cleaned up input file after error`);
             }
         } catch (cleanupErr) {
-            console.error('Cleanup error:', cleanupErr);
+            console.error(`[${jobId}] Cleanup error:`, cleanupErr);
+        } finally {
+            // Remove from active jobs
+            activeJobs.delete(jobId);
+            console.log(`[${jobId}] Job failed. Active jobs: ${activeJobs.size}/${MAX_CONCURRENT_PROCESSES}`);
         }
         
         res.status(500).json({ 
