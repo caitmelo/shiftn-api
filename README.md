@@ -104,21 +104,22 @@ curl -H "X-API-Key: your-api-key" \
 shiftn-api/
 ├── Dockerfile                 # Linux container with Wine
 ├── docker-compose.yml         # Service configuration
+├── railway.toml              # Railway deployment and autoscaling config
 ├── .env.example              # Environment template
 ├── .env                      # Environment variables (gitignored)
-├── setup.ps1                # Copy ShiftN files from installation
-├── install.ps1              # Build and start service
-├── test-api.ps1             # Test API endpoints
-├── test-client.html         # Interactive web test client
+├── setup.ps1                 # Copy ShiftN files from installation
+├── install.ps1               # Build and start service
+├── test-api.ps1              # Test API endpoints
+├── test-client.html          # Interactive web test client
 ├── api/                      # Node.js API server
-│   ├── server.js            # Express server with Wine integration
-│   ├── package.json         # Dependencies
-│   └── temp/                # Temporary upload/output directory
-└── shiftn-app/              # ShiftN Windows application files
+│   ├── server.js             # Express server with Wine integration
+│   ├── package.json          # Dependencies
+│   └── temp/                 # Temporary upload/output directory
+└── shiftn-app/               # ShiftN Windows application files
     ├── ShiftN.exe
     ├── ShiftN.ini
-    ├── *.dll                # Runtime dependencies
-    └── *.txt                # License files
+    ├── *.dll                 # Runtime dependencies
+    └── *.txt                 # License files
 ```
 
 ## API Documentation
