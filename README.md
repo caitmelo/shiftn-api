@@ -47,7 +47,7 @@ python3 -m unittest discover -s python_tests -v
 node tests/batch.cjs
 ```
 
-Six Python tests cover known rotation recovery, level/blank behavior, original-size export, unchanged pixel identity, invalid input, EXIF orientation, and native HTTP frontend/API integration. A JavaScript test covers batch isolation and Python failure handling. Supplied photographs were processed locally and the corrected preview inspected. The hosted Pyodide runtime has not been exercised in an actual browser during this handoff; browser-specific startup/performance remains a test item.
+Six Python tests cover known rotation recovery, level/blank behavior, original-size export, unchanged pixel identity, invalid input, EXIF orientation, and native HTTP frontend/API integration. A JavaScript test covers batch isolation and Python failure handling. Supplied photographs were processed locally and the corrected preview inspected. The original handoff did not exercise Pyodide. See the Python 1.1 update below.
 
 Dependencies in the browser are pinned by the Pyodide 0.27.7 distribution. Native dependency ranges are in `requirements.txt`; pin an exact lockfile for production. Pyodide setup: https://pyodide.org/en/0.27.7/usage/quickstart.html
 
@@ -59,3 +59,18 @@ This revision replaces the Node/Express + Wine + Windows ShiftN wrapper with the
 This is not a drop-in replacement for the old service: `/correct`, multipart uploads, `X-API-Key`, the old environment variables, Docker/Compose and Railway deployment instructions no longer apply. The included server is for local testing on port 8080; production hosting and authentication must be implemented before exposing a Python API publicly.
 
 Only the required HTML/CSS/JavaScript interface and Pyodide transport remain; image analysis and rendering run in Python. No user photographs, private Site configuration or credentials are included. Use your own test images. The existing repository LICENSE is retained.
+
+
+## Python 1.1 — browser rejection fix
+
+Reproduced the reported brick-house JPEG rejection in Pyodide 0.27.7 (NumPy 2.0.2, Pillow 10.2.0). Native decoding and browser-runtime decoding differ slightly, which changed edge proposals. The old final all-edge check rejected the agreed pose because conflicting non-upright edges dominated that check.
+
+The fix adds deterministic Hough tie-breaking and a constrained structural-consensus validation fallback: repeated pose agreement, majority count and length support, spatial coverage, improvement on alternating spatial subsets, and a worst-long-edge check. Existing all-edge acceptance thresholds remain unchanged. Analysis evidence includes runtime versions and an analysis-pixel hash. Cache versions and a Python module version assertion prevent stale engine code from being accepted silently.
+
+Validation: 9 native Python tests pass; 8 engine tests also pass in the exact Pyodide runtime using Node. The supplied failing JPEG now returns corrected in that runtime and exports at 1620 × 1080. This validates the processing runtime, not a full browser UI session or a universal success rate. The user photo remains excluded from the public repository.
+
+To reproduce with locally downloaded Pyodide 0.27.7 files and its NumPy/Pillow wheels:
+
+```sh
+node tests/wasm-regression.cjs /path/to/pyodide /path/to/expected-correctable.jpg
+```

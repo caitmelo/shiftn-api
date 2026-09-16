@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 from PIL import Image, ImageOps
 
-VERSION = 'python-1.0'
+VERSION = 'python-1.1'
 BASE = dict(roll=0., pitch=0., yaw=0., focal=.75)
 MAX_PIXELS = 60_000_000
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -81,7 +81,7 @@ def detect(im, threshold):
     for dt in range(-3,4):
         t=(theta+dt)%180;rad=np.deg2rad(t);rho=np.rint(xx*np.cos(rad)+yy*np.sin(rad)).astype(int)+d
         np.add.at(acc,(t,rho),1)
-    tt,rr=np.nonzero(acc>=12);order=np.argsort(acc[tt,rr])[::-1]
+    tt,rr=np.nonzero(acc>=12);order=np.lexsort((rr,tt,-acc[tt,rr]))
     chosen=[];proposals=[]
     for k in order:
         t,r=int(tt[k]),int(rr[k]-d)
@@ -229,6 +229,45 @@ def trace_refinement(lines,w,h):
     return dict(status='corrected',params=p,message='Python refined the camera tilt using continuous structural edges. Review the result.',evidence=dict(traceRefinement=True,sharedScoreBefore=before,sharedScoreAfter=after))
 
 
+def consensus_validation(lines, attempts, w, h):
+    """Validate agreed camera poses on a fixed, distributed structural consensus.
+
+    Roof edges and other non-uprights must not veto a pose solely by being long.
+    This fallback requires repeated pose agreement, majority edge support, and
+    improvement on both alternating spatial subsets. Thresholds are unchanged
+    for the existing all-edge validation path.
+    """
+    poses=[r for r,t in attempts if t and r['status']=='corrected']
+    if len(poses)<2 or len(lines)<6:return None
+    for r in poses:
+        p=r['params']
+        if abs(p['roll']-poses[0]['params']['roll'])>1 or abs(p['pitch']-poses[0]['params']['pitch'])>5:return None
+    masks=[errors(lines,{k:v for k,v in r['params'].items() if k!='mesh'},w,h)<1.2 for r in poses]
+    support=np.sum(masks,axis=0)>=max(2,len(poses)-1)
+    trusted=[l for l,ok in zip(lines,support) if ok]
+    if len(trusted)<6 or len(trusted)<len(lines)*.6 or spread(trusted,w)<.3:return None
+    if sum(l['length'] for l in trusted)<sum(l['length'] for l in lines)*.55:return None
+    ordered=sorted(trusted,key=lambda l:l['mid']);parts=[ordered[::2],ordered[1::2]]
+    if any(len(part)<3 or spread(part,w)<.2 for part in parts):return None
+    def score(group,p):
+        return float(np.average([min(float(np.var(project(l['points'],p,w,h)[:,0])),36) for l in group],weights=[l['length'] for l in group]))
+    before=score(trusted,BASE);whole_before=score(lines,BASE);eligible=[]
+    for r in poses:
+        p=r['params'];after=score(trusted,p)
+        if after>=before*.8 or score(lines,p)>whole_before*1.1:continue
+        if any(score(part,p)>=score(part,BASE)*.9 for part in parts):continue
+        long=[l for l in trusted if l['length']>h*.25]
+        if not long:continue
+        old=max(float(np.ptp(project(l['points'],BASE,w,h)[:,0])) for l in long)
+        new=max(float(np.ptp(project(l['points'],p,w,h)[:,0])) for l in long)
+        if new>old+.5:continue
+        eligible.append((after,r))
+    if not eligible:return None
+    after,result=min(eligible,key=lambda x:x[0]);result=dict(result)
+    result['evidence']=dict(result.get('evidence',{}),consensusValidation=True,structuralEdges=len(trusted),rejectedEdges=len(lines)-len(trusted),sharedScoreBefore=before,sharedScoreAfter=after)
+    return result
+
+
 def analyse(im):
     small=im.copy();small.thumbnail((900,900),Image.Resampling.LANCZOS);w,h=small.size
     attempts=[];all_lines=[]
@@ -253,11 +292,13 @@ def analyse(im):
     if eligible:
         value,result,threshold=min(eligible,key=lambda x:x[0]);result=dict(result)
         result['evidence']=dict(result.get('evidence',{}),sharedScoreBefore=original,sharedScoreAfter=value,threshold=threshold)
+    elif (consensus := consensus_validation(all_lines,attempts,w,h)) is not None:
+        result=consensus
     else:
         flat=[r for r,t in attempts if r['status']=='unchanged']
         if len(flat)>=2:result=dict(flat[0])
         else:result=dict(status='unresolved',params=dict(BASE),message='Could not establish a consistent correction. The original is preserved.')
-    result['evidence']=dict(result.get('evidence',{}),engine=VERSION,attempts=[dict(threshold=t,status=r['status'],reason=r.get('reason')) for r,t in attempts])
+    result['evidence']=dict(result.get('evidence',{}),engine=VERSION,analysisPixelHash=__import__('hashlib').sha256(small.tobytes()).hexdigest(),numpyVersion=np.__version__,pillowVersion=Image.__version__,attempts=[dict(threshold=t,status=r['status'],reason=r.get('reason')) for r,t in attempts])
     return result
 
 

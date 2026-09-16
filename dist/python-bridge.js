@@ -6,7 +6,7 @@ const PythonEngine=(()=>{
  }
  function start(){
   if(worker)return;
-  worker=new Worker('python-worker.js?v=9');
+  worker=new Worker('python-worker.js?v=10');
   worker.onmessage=({data})=>{
    if(data.progress){const status=document.getElementById('detail');if(status)status.textContent=data.progress;return;}
    const job=pending.get(data.id);if(!job)return;pending.delete(data.id);clearTimeout(job.timer);
