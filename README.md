@@ -85,3 +85,18 @@ New optional parameters `horizontalSlope` and `horizontalPerspective` default to
 This is dominant-face rectification, not calibrated 3D reconstruction. It may crop the image and alter apparent proportions; perpendicular walls, sloping roofs and depth lines should not all become horizontal. Ambiguous horizontal evidence leaves the existing upright result intact. Nonlinear local-mesh results are left intact rather than composed with an unvalidated facade transform. This feature does not guarantee success for arbitrary photos.
 
 Validation: 13 native Python tests and 12 engine tests in Pyodide 0.27.7 pass, including known horizontal projectivity recovery, upright preservation, inverse-mapping round trips, original-size rendering, and rejection of sparse/competing directions. The supplied pool/house photo changes from unchanged to corrected in both runtimes; the browser-runtime export is 2048 x 1377. Across 13 available photo fixtures, existing corrected statuses remain corrected; two earlier fixtures additionally receive horizontal correction. Corrected previews were inspected. These are regression checks, not a measured general success rate or full browser UI automation. Private photographs are not included in the public repository.
+
+
+## Python 1.3 — compression-sensitive horizontal retry
+
+The reported failure was reproduced with JPEG re-encoding and resizing of the pool/house fixture: two of twelve variants returned unresolved in 1.2 because the global upright solver abstained, preventing horizontal analysis. Version 1.3 permits a horizontal retry only when at least six distributed near-vertical edges have majority count/length support and weighted RMS below 0.65 degrees. Both spatial subsets must have coverage. Horizontal consensus checks remain unchanged, and the combined transform must not worsen upright RMS by more than 0.1 degree. A retry does not itself classify an image as corrected or unchanged.
+
+All twelve local compression/size variants now return corrected. The failing re-encoded variant also passes in Pyodide 0.27.7 with original-size export. Fourteen native tests pass, including the new rejection checks for sparse or actually tilted upright support. The thirteen available original photo fixtures retain their 1.2 results. These checks do not identify the exact bytes/runtime used in the user's screenshot, and are not full browser UI automation.
+
+The frontend adds **Download diagnostic report** for a selected result or processing error. Reports include filename, byte count, status, parameters, engine/library versions, rejection evidence and input SHA-256. This allows an exact-input/version comparison without distributing the photograph. Processing and diagnostic downloads remain local. Cache keys and the worker's engine assertion are updated to Python 1.3.
+
+The actual worker process/export handlers can be tested with the pinned runtime through Node adapters:
+
+```sh
+node tests/worker-flow.cjs /path/to/pyodide /path/to/expected-correctable.jpg
+```

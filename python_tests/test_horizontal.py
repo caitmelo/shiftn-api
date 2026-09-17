@@ -42,6 +42,17 @@ class HorizontalTests(unittest.TestCase):
         self.assertEqual(out.size,im.size)
         self.assertFalse(np.array_equal(np.asarray(out),np.asarray(im)))
 
+    def test_upright_retry_requires_distributed_near_vertical_support(self):
+        lines=[]
+        for i,x in enumerate(np.linspace(50,850,12)):
+            angle=(-1 if i%2 else 1)*(.2 if i<8 else .8)
+            a=np.array([x,80.]);b=np.array([x+400*np.tan(np.deg2rad(angle)),480.])
+            lines.append(dict(a=a,b=b,mid=x,length=400.,points=np.linspace(a,b,40)))
+        self.assertIsNotNone(s.upright_support(lines,900,600))
+        self.assertIsNone(s.upright_support(lines[:3],900,600))
+        for l in lines:l['b'][0]=l['a'][0]+400*np.tan(np.deg2rad(.9))
+        self.assertIsNone(s.upright_support(lines,900,600))
+
     def test_invalid_horizontal_parameters(self):
         for key,value in [('horizontalSlope',float('nan')),('horizontalPerspective',.8),('horizontalPerspective','0.1')]:
             with self.assertRaises(ValueError):s.export_bytes(b'',dict(s.BASE,**{key:value}))
