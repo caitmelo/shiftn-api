@@ -7,10 +7,10 @@ function initialize(){
   importScripts(indexURL+'pyodide.js');
   const py=await loadPyodide({indexURL});
   await py.loadPackage(['numpy','pillow']);
-  const response=await fetch('python/straighten.py?v=10',{cache:'no-store'});
+  const response=await fetch('python/straighten.py?v=11',{cache:'no-store'});
   if(!response.ok)throw Error('Could not load the Python straightening engine.');
   py.FS.writeFile('/home/pyodide/straighten.py',await response.text());
-  py.runPython("import straighten, json\nassert straighten.VERSION == 'python-1.1', 'Engine version mismatch. Reload the page.'");
+  py.runPython("import straighten, json\nassert straighten.VERSION == 'python-1.2', 'Engine version mismatch. Reload the page.'");
   return py;
  })().catch(e=>{ready=null;throw e});
  return ready;

@@ -10,7 +10,7 @@ import warnings
 import numpy as np
 from PIL import Image, ImageOps
 
-VERSION = 'python-1.1'
+VERSION = 'python-1.2'
 BASE = dict(roll=0., pitch=0., yaw=0., focal=.75)
 MAX_PIXELS = 60_000_000
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -39,8 +39,11 @@ def decode(raw):
 def matrix(p):
     a,b,c = np.deg2rad([p.get('roll',0), p.get('pitch',0), p.get('yaw',0)])
     ca,sa,cb,sb,cc,sc = np.cos(a),np.sin(a),np.cos(b),np.sin(b),np.cos(c),np.sin(c)
-    return np.array([[cc,0,sc],[0,1,0],[-sc,0,cc]]) @ np.array([[1,0,0],[0,cb,-sb],[0,sb,cb]]) @ np.array([[ca,-sa,0],[sa,ca,0],[0,0,1]])
+    rotation = np.array([[cc,0,sc],[0,1,0],[-sc,0,cc]]) @ np.array([[1,0,0],[0,cb,-sb],[0,sb,cb]]) @ np.array([[ca,-sa,0],[sa,ca,0],[0,0,1]])
 
+    # Projective facade rectification preserves the vertical vanishing point.
+    rect = np.array([[1.,0.,0.],[-p.get('horizontalSlope',0.),1.,0.],[p.get('horizontalPerspective',0.),0.,1.]])
+    return rect @ rotation
 
 def mesh_offset(x, y, p, w, h):
     anchors = p.get('mesh', [])
@@ -268,6 +271,81 @@ def consensus_validation(lines, attempts, w, h):
     return result
 
 
+def horizontal_fit(lines, w, h, base):
+    """Fit one horizontal vanishing direction, not every diagonal in a scene.
+
+    In normalized upright coordinates, a family of horizontal world lines has
+    slopes m = a + q*b (b is the y intercept). The rectification y'=y-a*x,
+    z'=1+q*x sends that vanishing point to horizontal infinity while keeping
+    upright lines upright. This is facade rectification, not 3D reconstruction.
+    """
+    if base.get('mesh'):return None  # Nonlinear meshes invalidate this linear fit.
+    f=max(w,h)*base.get('focal',.75);rows=[]
+    for line in lines:
+        pts=project(line['points'],base,w,h)
+        norm=(pts-[w/2,h/2])/f
+        if np.ptp(pts[:,0])<w*.08:continue
+        m,b=np.polyfit(norm[:,0],norm[:,1],1)
+        if abs(m)>.27:continue
+        residual=(norm[:,1]-m*norm[:,0]-b)*f
+        if np.quantile(np.abs(residual),.8)>1.5:continue
+        rows.append((m,b,min(np.ptp(pts[:,0]),w*.3),pts))
+    if len(rows)<6:return None
+    design=np.array([[1.,r[1]] for r in rows]);slopes=np.array([r[0] for r in rows]);weights=np.array([r[2] for r in rows])
+    best=None
+    for i in range(len(rows)):
+        for j in range(i):
+            if abs(rows[i][1]-rows[j][1])*f<h*.22:continue
+            pose=np.linalg.solve(design[[i,j]],slopes[[i,j]])
+            if abs(pose[0])>.12 or abs(pose[1])>.4:continue
+            good=np.abs(design@pose-slopes)<.008
+            support=float(weights[good].sum())
+            if good.sum()>=6 and (best is None or support>best[0]):best=(support,good)
+    if best is None:return None
+    support,good=best
+    if support<weights.sum()*.55:return None
+    ids=np.flatnonzero(good);ids=ids[np.argsort(design[ids,1])]
+    if np.ptp(design[ids,1])*f<h*.3:return None
+    # Independent height bands must support the same correction.
+    def fit_group(ix):
+        return np.linalg.lstsq(design[ix]*np.sqrt(weights[ix,None]),slopes[ix]*np.sqrt(weights[ix]),rcond=None)[0]
+    groups=[ids[::2],ids[1::2]]
+    if any(len(g)<3 or np.ptp(design[g,1])*f<h*.22 for g in groups):return None
+    poses=[fit_group(g) for g in groups];pose=fit_group(ids)
+    if abs(poses[0][0]-poses[1][0])>.008 or abs(poses[0][1]-poses[1][1])>.04:return None
+    if abs(pose[0])>.12 or abs(pose[1])>.4:return None
+    before=float(np.sqrt(np.average(slopes[ids]**2,weights=weights[ids])))
+    after=float(np.sqrt(np.average((design[ids]@pose-slopes[ids])**2,weights=weights[ids])))
+    if before<.012 or after>before*.4:return None
+    for train,test in ((groups[0],groups[1]),(groups[1],groups[0])):
+        if np.mean((design[test]@fit_group(train)-slopes[test])**2)>np.mean(slopes[test]**2)*.4:return None
+    candidate=dict(base,horizontalSlope=float(pose[0]),horizontalPerspective=float(pose[1]))
+    # Bound magnification and retain the existing crop protection.
+    corners=project([[0,0],[w,0],[0,h],[w,h]],base,w,h)
+    denominators=1+pose[1]*(corners[:,0]-w/2)/f
+    if denominators.min()<.7 or denominators.max()/denominators.min()>1.6:return None
+    try:mapping(w,h,candidate)
+    except ValueError:return None
+    return dict(params=candidate,evidence=dict(horizontalEdges=len(ids),horizontalBeforeDegrees=float(np.rad2deg(np.arctan(before))),horizontalAfterDegrees=float(np.rad2deg(np.arctan(after))),horizontalSlope=float(pose[0]),horizontalPerspective=float(pose[1])))
+
+
+def horizontal_refinement(im, result):
+    # Do not guess a facade correction when even the upright direction is unknown.
+    if result['status'] not in ('corrected','unchanged'):return result
+    w,h=im.size;transposed=im.transpose(Image.Transpose.TRANSPOSE);attempts=[]
+    for threshold in (25,12,8):
+        lines=detect(transposed,threshold)
+        lines=[dict(points=l['points'][:,::-1]) for l in lines]
+        candidate=horizontal_fit(lines,w,h,result['params'])
+        if candidate:attempts.append(candidate)
+    if len(attempts)<2:return result
+    # Repeated thresholds must agree; otherwise preserve the vertical-only result.
+    first=attempts[0]['params']
+    if any(abs(c['params']['horizontalSlope']-first['horizontalSlope'])>.008 or abs(c['params']['horizontalPerspective']-first['horizontalPerspective'])>.04 for c in attempts):return result
+    chosen=min(attempts,key=lambda c:c['evidence']['horizontalAfterDegrees'])
+    return dict(result,status='corrected',params=chosen['params'],message='Corrected the dominant building face using horizontal and vertical edges. Review the result.',evidence=dict(result.get('evidence',{}),horizontalCorrection=True,**chosen['evidence']))
+
+
 def analyse(im):
     small=im.copy();small.thumbnail((900,900),Image.Resampling.LANCZOS);w,h=small.size
     attempts=[];all_lines=[]
@@ -298,12 +376,13 @@ def analyse(im):
         flat=[r for r,t in attempts if r['status']=='unchanged']
         if len(flat)>=2:result=dict(flat[0])
         else:result=dict(status='unresolved',params=dict(BASE),message='Could not establish a consistent correction. The original is preserved.')
+    result=horizontal_refinement(small,result)
     result['evidence']=dict(result.get('evidence',{}),engine=VERSION,analysisPixelHash=__import__('hashlib').sha256(small.tobytes()).hexdigest(),numpyVersion=np.__version__,pillowVersion=Image.__version__,attempts=[dict(threshold=t,status=r['status'],reason=r.get('reason')) for r,t in attempts])
     return result
 
 
 def mapping(w,h,p):
-    inv=matrix(p).T;f=max(w,h)*p.get('focal',.75)
+    inv=np.linalg.inv(matrix(p));f=max(w,h)*p.get('focal',.75)
     def sample(x,y):
         x,y=np.broadcast_arrays(np.asarray(x,dtype=float),np.asarray(y,dtype=float));u=x.copy()
         for _ in range(5):u=x-mesh_offset(u,y,p,w,h)
@@ -322,7 +401,7 @@ def mapping(w,h,p):
 
 def render(im,p,preview=False):
     w,h=im.size
-    if not any(abs(p.get(k,0))>1e-9 for k in ('roll','pitch','yaw')) and not p.get('mesh'):
+    if not any(abs(p.get(k,0))>1e-9 for k in ('roll','pitch','yaw','horizontalSlope','horizontalPerspective')) and not p.get('mesh'):
         out=im.copy()
         if preview:out.thumbnail((1600,1600),Image.Resampling.LANCZOS)
         return out
@@ -362,6 +441,9 @@ def export_bytes(raw,params):
     for key in ('roll','pitch','yaw','focal'):
         if not isinstance(params.get(key),(float,int)) or not math.isfinite(params[key]):raise ValueError('Invalid correction parameters.')
     if abs(params['roll'])>30 or abs(params['pitch'])>35 or abs(params['yaw'])>20 or not .2<=params['focal']<=2:raise ValueError('Correction outside supported range.')
+    for key,limit in (('horizontalSlope',.12),('horizontalPerspective',.4)):
+        value=params.get(key,0.)
+        if not isinstance(value,(float,int)) or not math.isfinite(value) or abs(value)>limit:raise ValueError('Invalid horizontal correction.')
     anchors=params.get('mesh',[])
     if not isinstance(anchors,list) or len(anchors)>55:raise ValueError('Invalid local correction.')
     previous=-.5

@@ -32,7 +32,7 @@ Result status is `corrected`, `unchanged` (no correction detected), or `unresolv
 
 ## Algorithm and limits
 
-Gradient-directed Hough proposals are traced at subpixel precision. Robust camera roll/pitch estimation uses structural line consensus and split-support checks. Lower-contrast retries and continuous-track refinement are compared using shared edge measurements. Supported local corrections are bounded to 0.6% of image width. This is not AI, scene reconstruction, a calibrated lens profile or automatic photographer-position recovery. Yaw is not automatically inferred in this Python version.
+Gradient-directed Hough proposals are traced at subpixel precision. Robust camera roll/pitch estimation uses structural line consensus and split-support checks. Lower-contrast retries and continuous-track refinement are compared using shared edge measurements. Supported local corrections are bounded to 0.6% of image width. This is not AI, scene reconstruction, a calibrated lens profile or automatic photographer-position recovery. A guarded horizontal vanishing-direction estimator rectifies a dominant building face after the upright check. It does not recover calibrated camera yaw or make all faces of a 3D building front-facing.
 
 This is a Python reimplementation, not a bit-for-bit translation of the JavaScript engine. On the eight supplied unresolved examples, local CPython checks returned 1 corrected, 4 with no correction detected, and 3 unresolved. These outcomes do not establish higher accuracy; no-change outcomes are not proof that an image is correctly aligned. The known remaining examples and broader photographic benchmark still need work. A language switch does not guarantee a better success rate.
 
@@ -74,3 +74,14 @@ To reproduce with locally downloaded Pyodide 0.27.7 files and its NumPy/Pillow w
 ```sh
 node tests/wasm-regression.cjs /path/to/pyodide /path/to/expected-correctable.jpg
 ```
+
+
+## Python 1.2 — horizontal facade correction
+
+After the existing upright estimator succeeds or finds near-upright edges, a second pass detects near-horizontal tracks. It robustly fits a shared horizontal vanishing direction across multiple heights, requires majority length support, independent height-subset agreement and improvement, and agreement at two or more contrast thresholds. The resulting projective transform preserves the vertical vanishing point. The inverse renderer now uses a general matrix inverse, rather than the transpose used for pure rotations. Exports still sample original pixels once at original dimensions.
+
+New optional parameters `horizontalSlope` and `horizontalPerspective` default to zero. They are validated at export. Evidence reports the supporting horizontal edge count and before/after angular RMS. Existing API callers can continue passing old parameters unchanged. The frontend transports these fields without manual controls.
+
+This is dominant-face rectification, not calibrated 3D reconstruction. It may crop the image and alter apparent proportions; perpendicular walls, sloping roofs and depth lines should not all become horizontal. Ambiguous horizontal evidence leaves the existing upright result intact. Nonlinear local-mesh results are left intact rather than composed with an unvalidated facade transform. This feature does not guarantee success for arbitrary photos.
+
+Validation: 13 native Python tests and 12 engine tests in Pyodide 0.27.7 pass, including known horizontal projectivity recovery, upright preservation, inverse-mapping round trips, original-size rendering, and rejection of sparse/competing directions. The supplied pool/house photo changes from unchanged to corrected in both runtimes; the browser-runtime export is 2048 x 1377. Across 13 available photo fixtures, existing corrected statuses remain corrected; two earlier fixtures additionally receive horizontal correction. Corrected previews were inspected. These are regression checks, not a measured general success rate or full browser UI automation. Private photographs are not included in the public repository.
