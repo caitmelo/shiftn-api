@@ -1,6 +1,9 @@
+
 __pycache__/
-*.py[cod]
+*.pyc
 .venv/
-.env
-.env.*
-.DS_Store
+
+# Local model weights and private temporary exports
+models/
+.venv/
+api-results/
