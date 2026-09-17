@@ -74,7 +74,3 @@ To reproduce with locally downloaded Pyodide 0.27.7 files and its NumPy/Pillow w
 ```sh
 node tests/wasm-regression.cjs /path/to/pyodide /path/to/expected-correctable.jpg
 ```
-
-## Optional self-hosted watermark API
-
-See [WATERMARK_API.md](WATERMARK_API.md) for model setup, API deployment, tests and known limitations. The public static test page does not run these models. The straightening engine remains Python 1.1. Watermark detection is experimental and did not reliably cover the PACE REALTY example.

@@ -1,8 +1,0 @@
-.git
-models
-__pycache__
-**/__pycache__
-.venv
-*.zip
-*.tar.gz
-.env

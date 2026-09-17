@@ -1,4 +1,0 @@
-{
-  "detector": {"repo": "IDEA-Research/grounding-dino-tiny", "revision": "a2bb814dd30d776dcf7e30523b00659f4f141c71", "license": "Apache-2.0"},
-  "inpainting": {"repo": "Carve/LaMa-ONNX", "revision": "c3c0c9e468934d62e79c329e35d82dd09ff8c444", "file": "lama_fp32.onnx", "license": "Apache-2.0"}
-}
